@@ -5,7 +5,9 @@ import logging
 import os
 import random
 import time
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import discord
 from discord import app_commands
@@ -54,13 +56,19 @@ def parse_channel_ids() -> list[int]:
 RIKER_CHANNEL_IDS = parse_channel_ids()
 
 # Once per scheduler tick, Riker has this probability of posting.
-# 0.20 with a 60-minute tick means ~1 appearance every 5 hours on average.
+# 0.70 with a 60-minute tick means a post in 70% of eligible hours.
 RIKER_QUOTE_CHANCE = max(
-    0.0, min(1.0, float(os.getenv("RIKER_QUOTE_CHANCE", "0.20")))
+    0.0, min(1.0, float(os.getenv("RIKER_QUOTE_CHANCE", "0.70")))
 )
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6-luna").strip()
+
+# Scheduled appearances are welcome from 9:00 a.m. up to (but not including)
+# 9:00 p.m. Eastern. ZoneInfo handles EST/EDT transitions automatically.
+RIKER_TIMEZONE = ZoneInfo("America/New_York")
+RIKER_POST_START_HOUR = 9
+RIKER_POST_END_HOUR = 21
 
 # Per-user cooldown for AI-powered /riker advice requests.
 RIKER_ADVICE_COOLDOWN_SECONDS = max(
@@ -95,6 +103,23 @@ def load_quotes() -> list[dict[str, str]]:
 def choose_quote() -> dict[str, str] | None:
     quotes = load_quotes()
     return random.choice(quotes) if quotes else None
+
+
+def is_within_posting_hours(now: datetime | None = None) -> bool:
+    """Return whether an automated post may be sent at the supplied time.
+
+    Naive datetimes are interpreted as Eastern time. Aware datetimes are
+    converted to Eastern time, which keeps this helper easy to test while the
+    production scheduler can simply call it with no arguments.
+    """
+    if now is None:
+        eastern_now = datetime.now(RIKER_TIMEZONE)
+    elif now.tzinfo is None:
+        eastern_now = now.replace(tzinfo=RIKER_TIMEZONE)
+    else:
+        eastern_now = now.astimezone(RIKER_TIMEZONE)
+
+    return RIKER_POST_START_HOUR <= eastern_now.hour < RIKER_POST_END_HOUR
 
 
 def quote_embed(item: dict[str, str]) -> discord.Embed:
@@ -180,6 +205,46 @@ class RikerCommands(app_commands.Group):
     def __init__(self, client: RikerBot) -> None:
         super().__init__(name="riker", description="Commander Riker has the conn.")
         self.client = client
+
+    @app_commands.command(
+        name="help",
+        description="Learn how to use Commander Riker's commands.",
+    )
+    async def help(self, interaction: discord.Interaction) -> None:
+        """Show a concise guide without exposing private configuration values."""
+        embed = discord.Embed(
+            title="Commander Riker — Help",
+            description="The Commander is ready to assist.",
+        )
+        embed.add_field(
+            name="/riker quote",
+            value="Posts a random line from Riker's configured library.",
+            inline=False,
+        )
+        embed.add_field(
+            name="/riker advice question:<your question>",
+            value=(
+                "Ask for a concise, Riker-flavored take on a situation. "
+                "This requires AI mode to be enabled by the bot administrator."
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="/riker status",
+            value="Shows whether scheduled quotes and AI advice are online.",
+            inline=False,
+        )
+        embed.add_field(
+            name="Scheduled appearances",
+            value=(
+                "Riker may post spontaneously in administrator-approved channels "
+                "between 9:00 AM and 9:00 PM Eastern. Slash commands can still be "
+                "used outside those channels and hours wherever the bot has permission."
+            ),
+            inline=False,
+        )
+        embed.set_footer(text="Try /riker status if a feature is unavailable.")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="quote", description="Get a random Riker quote.")
     async def quote(self, interaction: discord.Interaction) -> None:
@@ -267,6 +332,7 @@ class RikerCommands(app_commands.Group):
         await interaction.response.send_message(
             f"**Commander Riker status**\n"
             f"• Scheduled quotes: {quote_mode}\n"
+            f"• Posting hours: 9:00 AM–9:00 PM Eastern\n"
             f"• AI advice: {ai_mode}\n"
             f"• Advice cooldown: {RIKER_ADVICE_COOLDOWN_SECONDS}s per user",
             ephemeral=True,
@@ -276,6 +342,13 @@ class RikerCommands(app_commands.Group):
 @tasks.loop(hours=1)
 async def riker_quote_scheduler() -> None:
     if not RIKER_CHANNEL_IDS:
+        return
+
+    # Check quiet hours before rolling the random chance. This guarantees the
+    # bot never sends an unsolicited quote overnight, regardless of when the
+    # hourly loop originally started or whether daylight saving time changed.
+    if not is_within_posting_hours():
+        log.info("Riker is observing quiet hours (9 PM–9 AM Eastern).")
         return
 
     if random.random() > RIKER_QUOTE_CHANCE:

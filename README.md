@@ -3,9 +3,11 @@
 A small Python Discord bot that:
 
 - periodically posts a random short Commander Riker quote in one of several approved channels
+- observes quiet hours and only posts scheduled quotes from 9:00 AM to 9:00 PM Eastern
 - supports `/riker quote`
 - supports `/riker advice <question>` when an OpenAI API key is configured
 - supports `/riker status`
+- supports `/riker help`
 - does **not** read ordinary server messages
 - keeps the real quote list in a simple `quotes.json` file
 
@@ -112,7 +114,7 @@ DISCORD_TOKEN=your_discord_token
 RIKER_CHANNEL_IDS=123456789012345678,234567890123456789
 DISCORD_GUILD_ID=987654321098765432
 
-RIKER_QUOTE_CHANCE=0.20
+RIKER_QUOTE_CHANCE=0.70
 RIKER_ADVICE_COOLDOWN_SECONDS=30
 
 OPENAI_API_KEY=your_openai_api_key
@@ -123,14 +125,20 @@ OPENAI_MODEL=gpt-5.6-luna
 
 The scheduler checks once per hour.
 
-`RIKER_QUOTE_CHANCE=0.20` means Riker has a 20% chance of posting each hour, so over a long period that averages around one appearance per five hours.
+Before rolling the random posting chance, it checks the current time in
+`America/New_York`. Scheduled posts are allowed beginning at 9:00 AM and stop
+at 9:00 PM (the 9:00 PM boundary is excluded). Daylight saving time is handled
+automatically. User-invoked slash commands remain available during quiet hours.
+
+`RIKER_QUOTE_CHANCE=0.70` means Riker has a 70% chance of posting during each eligible hourly check.
 
 When an appearance happens, the bot chooses one channel at random from `RIKER_CHANNEL_IDS`. This is an allow-list: Riker will not post scheduled quotes anywhere else.
 
 Examples:
 
 - `0.10` -> about one every 10 hours on average
-- `0.20` -> about one every 5 hours on average
+- `0.20` -> about one every 5 eligible hours on average
+- `0.70` -> a post during 70% of eligible hours
 - `0.50` -> about one every 2 hours on average
 - `1.00` -> every hour
 
@@ -155,6 +163,11 @@ RIKER_ADVICE_COOLDOWN_SECONDS=60
 
 
 ## 7. Commands
+
+### `/riker help`
+
+Shows a private, in-Discord guide to all RikerBot commands, scheduled posting
+hours, and where slash commands can be used.
 
 ### `/riker quote`
 
