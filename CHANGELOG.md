@@ -3,6 +3,19 @@
 Notable changes to RikerBot are recorded here. The project does not currently
 use numbered releases, so entries are grouped by date.
 
+## Unreleased
+
+### Added
+
+- Optional Windows launcher support for injecting `DISCORD_TOKEN` and
+  `OPENAI_API_KEY` from 1Password CLI secret references.
+- A safe `.env.op.example` template; real `.env.op` files remain ignored.
+
+### Documentation
+
+- Clarified that 1Password CLI is not required and users without it should
+  leave `.env.op` absent and continue using the standard `.env` workflow.
+
 ## 2026-08-23 — Diagnostics and livelier appearances
 
 ### Added
