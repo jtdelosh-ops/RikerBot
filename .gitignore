@@ -1,4 +1,5 @@
 .env
+.env.op
 riker_state.json
 riker_state.json.tmp
 .venv/

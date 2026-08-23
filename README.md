@@ -239,6 +239,29 @@ Never commit:
 
 If you accidentally expose a Discord token, reset it in the Developer Portal.
 
+### Optional: load secrets from 1Password
+
+The 1Password integration is optional. Users who do not use 1Password should
+leave `.env.op` absent and continue storing their credentials in the ignored
+local `.env` file normally. The standard launcher behavior remains unchanged
+for those users, and GitHub CLI is not required.
+
+On Windows, users who have 1Password can inject RikerBot's secrets at runtime
+instead of storing plaintext credentials in `.env`:
+
+1. Install and sign in to the 1Password desktop app and 1Password CLI.
+2. In 1Password, enable **Settings > Developer > Integrate with 1Password CLI**.
+3. Copy `.env.op.example` to `.env.op`.
+4. Replace the example `op://` URIs with the references for the Discord token
+   and OpenAI API key fields in your 1Password items.
+5. Start the bot with `run_windows.bat` and authorize 1Password when prompted.
+
+`.env.op` is ignored by Git and should contain references rather than plaintext
+secrets. Non-secret settings such as channel IDs and quote frequency remain in
+`.env`. If `.env.op` exists but 1Password CLI is unavailable, the launcher
+prints a clear explanation and stops safely; remove `.env.op` to return to the
+standard `.env` workflow.
+
 ## 10. How it works
 
 ```text
