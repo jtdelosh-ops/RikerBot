@@ -60,6 +60,9 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6-luna").strip()
 RIKER_ADVICE_COOLDOWN_SECONDS = max(
     0, int(os.getenv("RIKER_ADVICE_COOLDOWN_SECONDS", "30") or 30)
 )
+RIKER_ADVICE_MAX_OUTPUT_TOKENS = max(
+    100, min(1000, int(os.getenv("RIKER_ADVICE_MAX_OUTPUT_TOKENS", "500") or 500))
+)
 
 RIKER_TIMEZONE = ZoneInfo("America/New_York")
 RIKER_POST_START_HOUR = 9
@@ -230,7 +233,13 @@ Capture broad traits rather than copying scripts:
   or "Ensign", but do not do it every time
 
 Rules:
-- Keep the response concise: usually 1-4 sentences.
+- Reply in 1-2 sentences and never produce a wall of text.
+- Use playful, slightly flowery science-fiction language while still answering the request.
+- Loosely address the topic and intent; you do not need to complete complicated calculations,
+  write long programs, reproduce large datasets, or fulfill every part of a multi-part request.
+- When a request is too involved for a short Discord reply, give a witty, useful reaction or
+  high-level suggestion instead of attempting the entire task.
+- Avoid long matter-of-fact preambles, exhaustive explanations, and large code blocks.
 - Write new dialogue. Do not reproduce or continue dialogue from Star Trek.
 - Do not pretend a generated line is a real quotation from the show.
 - Avoid excessive catchphrases and constant Star Trek references.
@@ -473,10 +482,29 @@ class RikerCommands(app_commands.Group):
             response = await self.client.openai.responses.create(
                 model=OPENAI_MODEL,
                 instructions=RIKER_PERSONA,
-                input=f"Discord user {interaction.user.display_name} asks:\n{question}\n\nReply directly to that user.",
-                max_output_tokens=220,
+                input=(
+                    f"Discord user {interaction.user.display_name} asks:\n{question}\n\n"
+                    "Reply directly with a brief, playful Riker-style reaction in 1-2 sentences. "
+                    "If the request is complicated, react to its topic rather than completing "
+                    "the full task."
+                ),
+                max_output_tokens=RIKER_ADVICE_MAX_OUTPUT_TOKENS,
             )
-            text = (response.output_text or "").strip() or "I'm afraid the computer has declined to cooperate."
+            text = (response.output_text or "").strip()
+            if not text:
+                log.warning("OpenAI returned no advice text; retrying with a simplified prompt")
+                response = await self.client.openai.responses.create(
+                    model=OPENAI_MODEL,
+                    instructions=RIKER_PERSONA,
+                    input=(
+                        f"Give a playful 1-2 sentence sci-fi reaction to this topic; do not "
+                        f"calculate it or write code:\n{question}"
+                    ),
+                    max_output_tokens=300,
+                )
+                text = (response.output_text or "").strip()
+            if not text:
+                text = "That assignment may need a longer watch than this bridge shift, but I admire the ambition."
         except Exception:
             log.exception("OpenAI request failed")
             text = "The computer appears to be having a moment. Ask me again after Engineering has had a look."

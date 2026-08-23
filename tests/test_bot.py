@@ -88,6 +88,69 @@ class PermissionTests(unittest.TestCase):
         self.assertEqual(reason, "Missing Discord permission(s): Send Messages, Embed Links")
 
 
+class AdviceConfigurationTests(unittest.TestCase):
+    def test_advice_has_moderate_output_ceiling_and_concise_persona(self) -> None:
+        self.assertEqual(bot.RIKER_ADVICE_MAX_OUTPUT_TOKENS, 500)
+        self.assertIn("never produce a wall of text", bot.RIKER_PERSONA)
+        self.assertIn("slightly flowery science-fiction language", bot.RIKER_PERSONA)
+        self.assertIn("you do not need to complete complicated calculations", bot.RIKER_PERSONA)
+
+
+class AdviceResponseTests(unittest.IsolatedAsyncioTestCase):
+    async def test_empty_advice_retries_with_a_simpler_short_prompt(self) -> None:
+        openai = SimpleNamespace(
+            responses=SimpleNamespace(
+                create=AsyncMock(
+                    side_effect=[
+                        SimpleNamespace(output_text=""),
+                        SimpleNamespace(output_text="Tea first, Lieutenant. Pi can wait until Engineering finishes its diagnostics."),
+                    ]
+                )
+            )
+        )
+        client = SimpleNamespace(openai=openai, advice_last_used={})
+        commands = bot.RikerCommands(client)
+        interaction = SimpleNamespace(
+            user=SimpleNamespace(id=42, display_name="Data"),
+            response=SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock()),
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+
+        await bot.RikerCommands.advice.callback(
+            commands,
+            interaction,
+            "Make tea and calculate 200 digits of pi in COBOL.",
+        )
+
+        self.assertEqual(openai.responses.create.await_count, 2)
+        retry = openai.responses.create.await_args_list[1].kwargs
+        self.assertIn("do not calculate it or write code", retry["input"])
+        interaction.followup.send.assert_awaited_once_with(
+            "Tea first, Lieutenant. Pi can wait until Engineering finishes its diagnostics."
+        )
+
+    async def test_double_empty_advice_uses_in_character_fallback(self) -> None:
+        openai = SimpleNamespace(
+            responses=SimpleNamespace(
+                create=AsyncMock(return_value=SimpleNamespace(output_text=""))
+            )
+        )
+        client = SimpleNamespace(openai=openai, advice_last_used={})
+        commands = bot.RikerCommands(client)
+        interaction = SimpleNamespace(
+            user=SimpleNamespace(id=43, display_name="Geordi"),
+            response=SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock()),
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+
+        await bot.RikerCommands.advice.callback(commands, interaction, "Calculate pi.")
+
+        self.assertEqual(openai.responses.create.await_count, 2)
+        sent = interaction.followup.send.await_args.args[0]
+        self.assertNotIn("declined to cooperate", sent)
+        self.assertIn("bridge shift", sent)
+
+
 class AutomaticSendTests(unittest.IsolatedAsyncioTestCase):
     async def test_test_auto_delegates_to_shared_send_helper(self) -> None:
         client = MagicMock()
