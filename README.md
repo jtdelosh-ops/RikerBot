@@ -16,6 +16,8 @@ A small Python Discord bot that:
 
 The AI personality creates new dialogue inspired by Riker's broad character traits. It is instructed not to reproduce Star Trek scripts or claim generated dialogue is a real quote.
 
+See [CHANGELOG.md](CHANGELOG.md) for a dated summary of project changes.
+
 ## 1. Requirements
 
 - Python 3.11+ recommended
