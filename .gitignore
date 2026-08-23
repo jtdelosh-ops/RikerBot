@@ -1,4 +1,6 @@
 .env
+riker_state.json
+riker_state.json.tmp
 .venv/
 __pycache__/
 *.pyc

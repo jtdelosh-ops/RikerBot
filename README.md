@@ -8,6 +8,9 @@ A small Python Discord bot that:
 - supports `/riker advice <question>` when an OpenAI API key is configured
 - supports `/riker status`
 - supports `/riker help`
+- supports administrator diagnostics with `/riker test_auto`
+- avoids recently used quotes and persists lightweight posting state locally
+- can occasionally post clearly labeled, AI-generated original remarks
 - does **not** read ordinary server messages
 - keeps the real quote list in a simple `quotes.json` file
 
@@ -115,6 +118,8 @@ RIKER_CHANNEL_IDS=123456789012345678,234567890123456789
 DISCORD_GUILD_ID=987654321098765432
 
 RIKER_QUOTE_CHANCE=0.70
+RIKER_GENERATED_REMARK_CHANCE=0.20
+RIKER_RECENT_QUOTE_HISTORY_SIZE=10
 RIKER_ADVICE_COOLDOWN_SECONDS=30
 
 OPENAI_API_KEY=your_openai_api_key
@@ -143,6 +148,18 @@ Examples:
 - `1.00` -> every hour
 
 It remains random; those are averages, not fixed intervals.
+
+The effective chance is reduced from 9–11 AM, normal during the day, and
+slightly increased after 5 PM. It is also halved when Riker posted within the
+last two hours. Quiet hours always take precedence.
+
+`RIKER_GENERATED_REMARK_CHANCE` controls how often a successful appearance
+tries to generate a short original remark. Static quotes remain the default,
+and any missing or failed AI request falls back to a static quote.
+
+`RIKER_RECENT_QUOTE_HISTORY_SIZE` controls how many recently used quote texts
+are avoided. History and the last successful spontaneous-post time are stored
+in the ignored local `riker_state.json` file.
 
 
 ### AI advice cooldown
@@ -185,7 +202,15 @@ Example:
 
 ### `/riker status`
 
-Shows whether the scheduled quote system and optional AI system are enabled.
+Shows scheduler state, configured chance and hours, target channel names and
+IDs, per-channel Discord permissions, AI settings, and recent posting state.
+
+### `/riker test_auto`
+
+Server administrators can bypass probability and quiet hours to exercise the
+exact same channel resolution, permission checks, embed construction, and
+`channel.send(...)` call used by the hourly scheduler. The result is private
+and reports actionable Discord errors such as `50013 Missing Permissions`.
 
 ## 8. Add more quotes
 
