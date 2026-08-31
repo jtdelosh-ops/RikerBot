@@ -11,6 +11,17 @@ use numbered releases, so entries are grouped by date.
   `OPENAI_API_KEY` from 1Password CLI secret references.
 - A safe `.env.op.example` template; real `.env.op` files remain ignored.
 
+### Changed
+
+- Raised the configurable `/riker advice` response ceiling from 220 to 500
+  tokens while strengthening the concise, playful Riker-style guidance.
+- Changed complex advice requests to receive a short topical reaction instead
+  of a long calculation or program, with one simplified retry for empty replies.
+- Varied AI-generated spontaneous remark openings and blocked the repetitive
+  “Well, look what…” construction, retrying once before using a static quote.
+- Removed stale global slash-command registrations when server-specific commands
+  are configured, and added visible responses for command permission/errors.
+
 ### Documentation
 
 - Clarified that 1Password CLI is not required and users without it should

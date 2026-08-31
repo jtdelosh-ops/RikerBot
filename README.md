@@ -121,6 +121,7 @@ DISCORD_GUILD_ID=987654321098765432
 
 RIKER_QUOTE_CHANCE=0.70
 RIKER_GENERATED_REMARK_CHANCE=0.20
+RIKER_ADVICE_MAX_OUTPUT_TOKENS=500
 RIKER_RECENT_QUOTE_HISTORY_SIZE=10
 RIKER_ADVICE_COOLDOWN_SECONDS=30
 
@@ -173,6 +174,11 @@ RIKER_ADVICE_COOLDOWN_SECONDS=30
 ```
 
 With the default `30`, each Discord user can make at most one accepted AI advice request every 30 seconds. The cooldown is tracked separately for each user.
+
+`RIKER_ADVICE_MAX_OUTPUT_TOKENS` sets a moderate response ceiling. The default
+`500` gives nuanced replies room to finish, while the personality instructions
+keep responses to one or two playful sentences. Complicated calculations,
+large code requests, and multi-part tasks receive a short topical reaction.
 
 Set it higher if you want stronger cost protection, for example:
 

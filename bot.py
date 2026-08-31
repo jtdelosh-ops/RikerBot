@@ -60,6 +60,9 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6-luna").strip()
 RIKER_ADVICE_COOLDOWN_SECONDS = max(
     0, int(os.getenv("RIKER_ADVICE_COOLDOWN_SECONDS", "30") or 30)
 )
+RIKER_ADVICE_MAX_OUTPUT_TOKENS = max(
+    100, min(1000, int(os.getenv("RIKER_ADVICE_MAX_OUTPUT_TOKENS", "500") or 500))
+)
 
 RIKER_TIMEZONE = ZoneInfo("America/New_York")
 RIKER_POST_START_HOUR = 9
@@ -230,12 +233,33 @@ Capture broad traits rather than copying scripts:
   or "Ensign", but do not do it every time
 
 Rules:
-- Keep the response concise: usually 1-4 sentences.
+- Reply in 1-2 sentences and never produce a wall of text.
+- Use playful, slightly flowery science-fiction language while still answering the request.
+- Loosely address the topic and intent; you do not need to complete complicated calculations,
+  write long programs, reproduce large datasets, or fulfill every part of a multi-part request.
+- When a request is too involved for a short Discord reply, give a witty, useful reaction or
+  high-level suggestion instead of attempting the entire task.
+- Avoid long matter-of-fact preambles, exhaustive explanations, and large code blocks.
 - Write new dialogue. Do not reproduce or continue dialogue from Star Trek.
 - Do not pretend a generated line is a real quotation from the show.
 - Avoid excessive catchphrases and constant Star Trek references.
 - If the user asks a serious factual question, be useful first and in-character second.
 """.strip()
+
+SPONTANEOUS_OPENING_STYLES = (
+    "a confident observation",
+    "a dry aside to the crew",
+    "a warm check-in",
+    "a playful command-deck thought",
+    "a curious question",
+    "a concise bit of encouragement",
+)
+FORBIDDEN_REMARK_OPENINGS = ("well, look what",)
+
+
+def has_forbidden_remark_opening(text: str) -> bool:
+    normalized = text.lstrip(" \t\r\n\"'“‘").casefold()
+    return any(normalized.startswith(opening) for opening in FORBIDDEN_REMARK_OPENINGS)
 
 
 class RikerBot(discord.Client):
@@ -256,6 +280,11 @@ class RikerBot(discord.Client):
             self.tree.copy_global_to(guild=guild)
             synced = await self.tree.sync(guild=guild)
             log.info("Synced %d command(s) to guild %s", len(synced), DISCORD_GUILD_ID)
+            # Remove stale global registrations so Discord shows only the fast,
+            # server-specific command set while a development guild is configured.
+            self.tree.clear_commands(guild=None)
+            removed = await self.tree.sync()
+            log.info("Cleared stale global commands; %d global command(s) remain", len(removed))
         else:
             synced = await self.tree.sync()
             log.info("Synced %d global command(s)", len(synced))
@@ -274,6 +303,26 @@ class RikerBot(discord.Client):
 
 
 bot = RikerBot()
+
+
+async def handle_app_command_error(
+    interaction: discord.Interaction, error: app_commands.AppCommandError
+) -> None:
+    if isinstance(error, app_commands.MissingPermissions):
+        message = "You need Discord's Manage Server permission to run that command."
+    else:
+        log.exception("Slash command failed", exc_info=error)
+        message = "Riker hit a command-deck fault. Check the bot terminal for the specific error."
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(message, ephemeral=True)
+        else:
+            await interaction.response.send_message(message, ephemeral=True)
+    except discord.DiscordException:
+        log.exception("Could not report slash-command failure to Discord")
+
+
+bot.tree.error(handle_app_command_error)
 
 
 async def resolve_riker_channel(
@@ -315,16 +364,32 @@ async def generate_spontaneous_remark(client: RikerBot) -> str | None:
     if not client.openai:
         return None
     try:
-        response = await client.openai.responses.create(
-            model=OPENAI_MODEL,
-            instructions=RIKER_PERSONA,
-            input=(
-                "Write one short original remark for a spontaneous Discord appearance. "
-                "Keep it to one or two sentences. Do not quote or cite Star Trek."
-            ),
-            max_output_tokens=100,
-        )
-        return (response.output_text or "").strip() or None
+        opening_style = random.choice(SPONTANEOUS_OPENING_STYLES)
+        for attempt in range(2):
+            retry_note = (
+                " The previous draft used a forbidden repetitive opening; begin in a clearly "
+                "different way."
+                if attempt
+                else ""
+            )
+            response = await client.openai.responses.create(
+                model=OPENAI_MODEL,
+                instructions=RIKER_PERSONA,
+                input=(
+                    "Write one short original remark for a spontaneous Discord appearance. "
+                    "Keep it to one or two sentences. Do not quote or cite Star Trek. "
+                    f"Open with {opening_style}; vary sentence structure and first words. "
+                    "Never begin with 'Well, look what' or a close variation."
+                    f"{retry_note}"
+                ),
+                max_output_tokens=100,
+            )
+            remark = (response.output_text or "").strip()
+            if remark and not has_forbidden_remark_opening(remark):
+                return remark
+            if remark:
+                log.warning("Rejected repetitive generated remark opening; retrying")
+        return None
     except Exception:
         log.exception("Could not generate a spontaneous Riker remark; using a quote")
         return None
@@ -473,10 +538,29 @@ class RikerCommands(app_commands.Group):
             response = await self.client.openai.responses.create(
                 model=OPENAI_MODEL,
                 instructions=RIKER_PERSONA,
-                input=f"Discord user {interaction.user.display_name} asks:\n{question}\n\nReply directly to that user.",
-                max_output_tokens=220,
+                input=(
+                    f"Discord user {interaction.user.display_name} asks:\n{question}\n\n"
+                    "Reply directly with a brief, playful Riker-style reaction in 1-2 sentences. "
+                    "If the request is complicated, react to its topic rather than completing "
+                    "the full task."
+                ),
+                max_output_tokens=RIKER_ADVICE_MAX_OUTPUT_TOKENS,
             )
-            text = (response.output_text or "").strip() or "I'm afraid the computer has declined to cooperate."
+            text = (response.output_text or "").strip()
+            if not text:
+                log.warning("OpenAI returned no advice text; retrying with a simplified prompt")
+                response = await self.client.openai.responses.create(
+                    model=OPENAI_MODEL,
+                    instructions=RIKER_PERSONA,
+                    input=(
+                        f"Give a playful 1-2 sentence sci-fi reaction to this topic; do not "
+                        f"calculate it or write code:\n{question}"
+                    ),
+                    max_output_tokens=300,
+                )
+                text = (response.output_text or "").strip()
+            if not text:
+                text = "That assignment may need a longer watch than this bridge shift, but I admire the ambition."
         except Exception:
             log.exception("OpenAI request failed")
             text = "The computer appears to be having a moment. Ask me again after Engineering has had a look."

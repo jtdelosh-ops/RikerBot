@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
+from discord import app_commands
 
 import bot
 
@@ -86,6 +87,117 @@ class PermissionTests(unittest.TestCase):
             {"view_channel": True, "send_messages": False, "embed_links": False}
         )
         self.assertEqual(reason, "Missing Discord permission(s): Send Messages, Embed Links")
+
+
+class SlashCommandErrorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_missing_manage_server_permission_gets_a_response(self) -> None:
+        interaction = SimpleNamespace(
+            response=SimpleNamespace(is_done=MagicMock(return_value=False), send_message=AsyncMock()),
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+        error = app_commands.MissingPermissions(["manage_guild"])
+
+        await bot.handle_app_command_error(interaction, error)
+
+        interaction.response.send_message.assert_awaited_once_with(
+            "You need Discord's Manage Server permission to run that command.",
+            ephemeral=True,
+        )
+        interaction.followup.send.assert_not_awaited()
+
+
+class AdviceConfigurationTests(unittest.TestCase):
+    def test_advice_has_moderate_output_ceiling_and_concise_persona(self) -> None:
+        self.assertEqual(bot.RIKER_ADVICE_MAX_OUTPUT_TOKENS, 500)
+        self.assertIn("never produce a wall of text", bot.RIKER_PERSONA)
+        self.assertIn("slightly flowery science-fiction language", bot.RIKER_PERSONA)
+        self.assertIn("you do not need to complete complicated calculations", bot.RIKER_PERSONA)
+
+
+class AdviceResponseTests(unittest.IsolatedAsyncioTestCase):
+    async def test_empty_advice_retries_with_a_simpler_short_prompt(self) -> None:
+        openai = SimpleNamespace(
+            responses=SimpleNamespace(
+                create=AsyncMock(
+                    side_effect=[
+                        SimpleNamespace(output_text=""),
+                        SimpleNamespace(output_text="Tea first, Lieutenant. Pi can wait until Engineering finishes its diagnostics."),
+                    ]
+                )
+            )
+        )
+        client = SimpleNamespace(openai=openai, advice_last_used={})
+        commands = bot.RikerCommands(client)
+        interaction = SimpleNamespace(
+            user=SimpleNamespace(id=42, display_name="Data"),
+            response=SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock()),
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+
+        await bot.RikerCommands.advice.callback(
+            commands,
+            interaction,
+            "Make tea and calculate 200 digits of pi in COBOL.",
+        )
+
+        self.assertEqual(openai.responses.create.await_count, 2)
+        retry = openai.responses.create.await_args_list[1].kwargs
+        self.assertIn("do not calculate it or write code", retry["input"])
+        interaction.followup.send.assert_awaited_once_with(
+            "Tea first, Lieutenant. Pi can wait until Engineering finishes its diagnostics."
+        )
+
+    async def test_double_empty_advice_uses_in_character_fallback(self) -> None:
+        openai = SimpleNamespace(
+            responses=SimpleNamespace(
+                create=AsyncMock(return_value=SimpleNamespace(output_text=""))
+            )
+        )
+        client = SimpleNamespace(openai=openai, advice_last_used={})
+        commands = bot.RikerCommands(client)
+        interaction = SimpleNamespace(
+            user=SimpleNamespace(id=43, display_name="Geordi"),
+            response=SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock()),
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+
+        await bot.RikerCommands.advice.callback(commands, interaction, "Calculate pi.")
+
+        self.assertEqual(openai.responses.create.await_count, 2)
+        sent = interaction.followup.send.await_args.args[0]
+        self.assertNotIn("declined to cooperate", sent)
+        self.assertIn("bridge shift", sent)
+
+
+class SpontaneousRemarkTests(unittest.IsolatedAsyncioTestCase):
+    def test_repetitive_opening_is_detected_even_with_quote_marks(self) -> None:
+        self.assertTrue(bot.has_forbidden_remark_opening('“Well, look what drifted in.”'))
+        self.assertFalse(bot.has_forbidden_remark_opening("The bridge could use a little music."))
+
+    async def test_repetitive_opening_is_regenerated(self) -> None:
+        create = AsyncMock(
+            side_effect=[
+                SimpleNamespace(output_text="Well, look what wandered onto the bridge."),
+                SimpleNamespace(output_text="The bridge is unusually quiet—enjoy it while it lasts."),
+            ]
+        )
+        client = SimpleNamespace(openai=SimpleNamespace(responses=SimpleNamespace(create=create)))
+
+        with patch.object(bot.random, "choice", return_value="a dry aside to the crew"):
+            remark = await bot.generate_spontaneous_remark(client)
+
+        self.assertEqual(create.await_count, 2)
+        self.assertEqual(remark, "The bridge is unusually quiet—enjoy it while it lasts.")
+        self.assertIn("Never begin with 'Well, look what'", create.await_args_list[0].kwargs["input"])
+
+    async def test_two_repetitive_openings_fall_back_to_static_quote(self) -> None:
+        create = AsyncMock(return_value=SimpleNamespace(output_text="Well, look what we have here."))
+        client = SimpleNamespace(openai=SimpleNamespace(responses=SimpleNamespace(create=create)))
+
+        remark = await bot.generate_spontaneous_remark(client)
+
+        self.assertIsNone(remark)
+        self.assertEqual(create.await_count, 2)
 
 
 class AutomaticSendTests(unittest.IsolatedAsyncioTestCase):
