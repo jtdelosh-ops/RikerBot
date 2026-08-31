@@ -246,6 +246,21 @@ Rules:
 - If the user asks a serious factual question, be useful first and in-character second.
 """.strip()
 
+SPONTANEOUS_OPENING_STYLES = (
+    "a confident observation",
+    "a dry aside to the crew",
+    "a warm check-in",
+    "a playful command-deck thought",
+    "a curious question",
+    "a concise bit of encouragement",
+)
+FORBIDDEN_REMARK_OPENINGS = ("well, look what",)
+
+
+def has_forbidden_remark_opening(text: str) -> bool:
+    normalized = text.lstrip(" \t\r\n\"'“‘").casefold()
+    return any(normalized.startswith(opening) for opening in FORBIDDEN_REMARK_OPENINGS)
+
 
 class RikerBot(discord.Client):
     def __init__(self) -> None:
@@ -265,6 +280,11 @@ class RikerBot(discord.Client):
             self.tree.copy_global_to(guild=guild)
             synced = await self.tree.sync(guild=guild)
             log.info("Synced %d command(s) to guild %s", len(synced), DISCORD_GUILD_ID)
+            # Remove stale global registrations so Discord shows only the fast,
+            # server-specific command set while a development guild is configured.
+            self.tree.clear_commands(guild=None)
+            removed = await self.tree.sync()
+            log.info("Cleared stale global commands; %d global command(s) remain", len(removed))
         else:
             synced = await self.tree.sync()
             log.info("Synced %d global command(s)", len(synced))
@@ -283,6 +303,26 @@ class RikerBot(discord.Client):
 
 
 bot = RikerBot()
+
+
+async def handle_app_command_error(
+    interaction: discord.Interaction, error: app_commands.AppCommandError
+) -> None:
+    if isinstance(error, app_commands.MissingPermissions):
+        message = "You need Discord's Manage Server permission to run that command."
+    else:
+        log.exception("Slash command failed", exc_info=error)
+        message = "Riker hit a command-deck fault. Check the bot terminal for the specific error."
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(message, ephemeral=True)
+        else:
+            await interaction.response.send_message(message, ephemeral=True)
+    except discord.DiscordException:
+        log.exception("Could not report slash-command failure to Discord")
+
+
+bot.tree.error(handle_app_command_error)
 
 
 async def resolve_riker_channel(
@@ -324,16 +364,32 @@ async def generate_spontaneous_remark(client: RikerBot) -> str | None:
     if not client.openai:
         return None
     try:
-        response = await client.openai.responses.create(
-            model=OPENAI_MODEL,
-            instructions=RIKER_PERSONA,
-            input=(
-                "Write one short original remark for a spontaneous Discord appearance. "
-                "Keep it to one or two sentences. Do not quote or cite Star Trek."
-            ),
-            max_output_tokens=100,
-        )
-        return (response.output_text or "").strip() or None
+        opening_style = random.choice(SPONTANEOUS_OPENING_STYLES)
+        for attempt in range(2):
+            retry_note = (
+                " The previous draft used a forbidden repetitive opening; begin in a clearly "
+                "different way."
+                if attempt
+                else ""
+            )
+            response = await client.openai.responses.create(
+                model=OPENAI_MODEL,
+                instructions=RIKER_PERSONA,
+                input=(
+                    "Write one short original remark for a spontaneous Discord appearance. "
+                    "Keep it to one or two sentences. Do not quote or cite Star Trek. "
+                    f"Open with {opening_style}; vary sentence structure and first words. "
+                    "Never begin with 'Well, look what' or a close variation."
+                    f"{retry_note}"
+                ),
+                max_output_tokens=100,
+            )
+            remark = (response.output_text or "").strip()
+            if remark and not has_forbidden_remark_opening(remark):
+                return remark
+            if remark:
+                log.warning("Rejected repetitive generated remark opening; retrying")
+        return None
     except Exception:
         log.exception("Could not generate a spontaneous Riker remark; using a quote")
         return None

@@ -17,6 +17,10 @@ use numbered releases, so entries are grouped by date.
   tokens while strengthening the concise, playful Riker-style guidance.
 - Changed complex advice requests to receive a short topical reaction instead
   of a long calculation or program, with one simplified retry for empty replies.
+- Varied AI-generated spontaneous remark openings and blocked the repetitive
+  “Well, look what…” construction, retrying once before using a static quote.
+- Removed stale global slash-command registrations when server-specific commands
+  are configured, and added visible responses for command permission/errors.
 
 ### Documentation
 
