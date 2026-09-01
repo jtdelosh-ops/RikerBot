@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import random
 import time
@@ -262,6 +263,23 @@ def has_forbidden_remark_opening(text: str) -> bool:
     return any(normalized.startswith(opening) for opening in FORBIDDEN_REMARK_OPENINGS)
 
 
+async def clear_stale_global_commands(tree: app_commands.CommandTree) -> None:
+    """Remove and verify old global commands before publishing guild commands."""
+    tree.clear_commands(guild=None)
+    for attempt in range(2):
+        await tree.sync()
+        remaining = await tree.fetch_commands()
+        if not remaining:
+            log.info("Verified that no global slash commands remain")
+            return
+        log.warning(
+            "Global command cleanup attempt %d left: %s",
+            attempt + 1,
+            ", ".join(command.name for command in remaining),
+        )
+    raise RuntimeError("Discord still reports stale global slash commands after cleanup")
+
+
 class RikerBot(discord.Client):
     def __init__(self) -> None:
         intents = discord.Intents.default()
@@ -274,18 +292,17 @@ class RikerBot(discord.Client):
         self.advice_last_used: dict[int, float] = {}
 
     async def setup_hook(self) -> None:
-        self.tree.add_command(RikerCommands(self))
         if DISCORD_GUILD_ID:
             guild = discord.Object(id=DISCORD_GUILD_ID)
-            self.tree.copy_global_to(guild=guild)
+            # Register directly in the configured server. Keeping the local
+            # command tree guild-only prevents a second global /riker group
+            # from being published during startup or a later resync.
+            self.tree.add_command(RikerCommands(self), guild=guild)
+            await clear_stale_global_commands(self.tree)
             synced = await self.tree.sync(guild=guild)
             log.info("Synced %d command(s) to guild %s", len(synced), DISCORD_GUILD_ID)
-            # Remove stale global registrations so Discord shows only the fast,
-            # server-specific command set while a development guild is configured.
-            self.tree.clear_commands(guild=None)
-            removed = await self.tree.sync()
-            log.info("Cleared stale global commands; %d global command(s) remain", len(removed))
         else:
+            self.tree.add_command(RikerCommands(self))
             synced = await self.tree.sync()
             log.info("Synced %d global command(s)", len(synced))
         if RIKER_CHANNEL_IDS:
@@ -310,6 +327,12 @@ async def handle_app_command_error(
 ) -> None:
     if isinstance(error, app_commands.MissingPermissions):
         message = "You need Discord's Manage Server permission to run that command."
+    elif isinstance(error, app_commands.CommandOnCooldown):
+        seconds = max(1, math.ceil(error.retry_after))
+        message = (
+            f"Easy, Lieutenant. The automatic-post test can run again in "
+            f"{seconds} second{'s' if seconds != 1 else ''}."
+        )
     else:
         log.exception("Slash command failed", exc_info=error)
         message = "Riker hit a command-deck fault. Check the bot terminal for the specific error."
@@ -491,7 +514,10 @@ class RikerCommands(app_commands.Group):
         embed.add_field(name="/riker status", value="Shows scheduler, channel permission, AI, and recent-post diagnostics.", inline=False)
         embed.add_field(
             name="/riker test_auto",
-            value="Administrators can test the exact spontaneous-post path while bypassing chance and quiet hours.",
+            value=(
+                "Tests the exact spontaneous-post path while bypassing chance and "
+                "quiet hours. Available to everyone, with a server-wide one-minute cooldown."
+            ),
             inline=False,
         )
         embed.add_field(
@@ -567,8 +593,7 @@ class RikerCommands(app_commands.Group):
         await interaction.followup.send(text[:1900])
 
     @app_commands.command(name="test_auto", description="Test Riker's real spontaneous-post path now.")
-    @app_commands.default_permissions(manage_guild=True)
-    @app_commands.checks.has_permissions(manage_guild=True)
+    @app_commands.checks.cooldown(1, 60.0, key=lambda interaction: interaction.guild_id)
     async def test_auto(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True, thinking=True)
         result = await send_spontaneous_quote(self.client)

@@ -105,6 +105,52 @@ class SlashCommandErrorTests(unittest.IsolatedAsyncioTestCase):
         )
         interaction.followup.send.assert_not_awaited()
 
+    async def test_test_auto_cooldown_gets_a_clear_response(self) -> None:
+        interaction = SimpleNamespace(
+            response=SimpleNamespace(is_done=MagicMock(return_value=False), send_message=AsyncMock()),
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+        error = app_commands.CommandOnCooldown(app_commands.Cooldown(1, 60.0), 12.2)
+
+        await bot.handle_app_command_error(interaction, error)
+
+        interaction.response.send_message.assert_awaited_once_with(
+            "Easy, Lieutenant. The automatic-post test can run again in 13 seconds.",
+            ephemeral=True,
+        )
+
+
+class SlashCommandRegistrationTests(unittest.IsolatedAsyncioTestCase):
+    def test_test_auto_does_not_require_manage_server(self) -> None:
+        self.assertIsNone(bot.RikerCommands.test_auto.default_permissions)
+
+    async def test_global_cleanup_is_verified(self) -> None:
+        tree = SimpleNamespace(
+            clear_commands=MagicMock(),
+            sync=AsyncMock(return_value=[]),
+            fetch_commands=AsyncMock(return_value=[]),
+        )
+
+        await bot.clear_stale_global_commands(tree)
+
+        tree.clear_commands.assert_called_once_with(guild=None)
+        tree.sync.assert_awaited_once_with()
+        tree.fetch_commands.assert_awaited_once_with()
+
+    async def test_global_cleanup_retries_a_stale_registration(self) -> None:
+        tree = SimpleNamespace(
+            clear_commands=MagicMock(),
+            sync=AsyncMock(return_value=[]),
+            fetch_commands=AsyncMock(
+                side_effect=[[SimpleNamespace(name="riker")], []]
+            ),
+        )
+
+        await bot.clear_stale_global_commands(tree)
+
+        self.assertEqual(tree.sync.await_count, 2)
+        self.assertEqual(tree.fetch_commands.await_count, 2)
+
 
 class AdviceConfigurationTests(unittest.TestCase):
     def test_advice_has_moderate_output_ceiling_and_concise_persona(self) -> None:

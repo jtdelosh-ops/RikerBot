@@ -8,7 +8,7 @@ A small Python Discord bot that:
 - supports `/riker advice <question>` when an OpenAI API key is configured
 - supports `/riker status`
 - supports `/riker help`
-- supports administrator diagnostics with `/riker test_auto`
+- lets members exercise the spontaneous-post path with `/riker test_auto`
 - avoids recently used quotes and persists lightweight posting state locally
 - can occasionally post clearly labeled, AI-generated original remarks
 - does **not** read ordinary server messages
@@ -215,10 +215,11 @@ IDs, per-channel Discord permissions, AI settings, and recent posting state.
 
 ### `/riker test_auto`
 
-Server administrators can bypass probability and quiet hours to exercise the
-exact same channel resolution, permission checks, embed construction, and
-`channel.send(...)` call used by the hourly scheduler. The result is private
-and reports actionable Discord errors such as `50013 Missing Permissions`.
+Any server member can bypass probability and quiet hours to exercise the exact
+same channel resolution, permission checks, embed construction, and
+`channel.send(...)` call used by the hourly scheduler. A server-wide one-minute
+cooldown prevents repeated public posts. The result is private and reports
+actionable Discord errors such as `50013 Missing Permissions`.
 
 ## 8. Add more quotes
 
