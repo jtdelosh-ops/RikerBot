@@ -21,6 +21,11 @@ use numbered releases, so entries are grouped by date.
   “Well, look what…” construction, retrying once before using a static quote.
 - Removed stale global slash-command registrations when server-specific commands
   are configured, and added visible responses for command permission/errors.
+- Registered server commands directly in the configured guild and verified that
+  stale global commands are gone, preventing duplicate `status` and `test_auto`
+  entries in Discord's command picker.
+- Opened `/riker test_auto` to all server members, protected by a server-wide
+  one-minute cooldown to limit repeated public test posts.
 
 ### Documentation
 
