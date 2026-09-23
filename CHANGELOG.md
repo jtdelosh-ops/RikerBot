@@ -7,11 +7,21 @@ use numbered releases, so entries are grouped by date.
 
 ### Added
 
+- A seven-day spontaneous-content rhythm with rolling histories for generated
+  remark text, topics, openings, and formats to reduce stale repetition.
+
+- `/riker awaymission`: three short branching encounters with shared buttons,
+  edits in place, silent expiry, approved-channel restriction, and a five-minute
+  channel cooldown. Uses local original fiction without AI calls.
+
 - Optional Windows launcher support for injecting `DISCORD_TOKEN` and
   `OPENAI_API_KEY` from 1Password CLI secret references.
 - A safe `.env.op.example` template; real `.env.op` files remain ignored.
 
 ### Changed
+
+- Increased the default generated-remark chance from 20% to 50%; static quotes
+  remain the fallback when AI is unavailable or fails.
 
 - Raised the configurable `/riker advice` response ceiling from 220 to 500
   tokens while strengthening the concise, playful Riker-style guidance.
