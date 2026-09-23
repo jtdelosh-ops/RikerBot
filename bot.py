@@ -17,6 +17,7 @@ from discord import app_commands
 from discord.ext import tasks
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
+from away_missions import AwayMissionView
 
 load_dotenv()
 
@@ -51,7 +52,7 @@ def parse_channel_ids() -> list[int]:
 RIKER_CHANNEL_IDS = parse_channel_ids()
 RIKER_QUOTE_CHANCE = max(0.0, min(1.0, float(os.getenv("RIKER_QUOTE_CHANCE", "0.70"))))
 RIKER_GENERATED_REMARK_CHANCE = max(
-    0.0, min(1.0, float(os.getenv("RIKER_GENERATED_REMARK_CHANCE", "0.20")))
+    0.0, min(1.0, float(os.getenv("RIKER_GENERATED_REMARK_CHANCE", "0.50")))
 )
 RIKER_RECENT_QUOTE_HISTORY_SIZE = max(
     0, int(os.getenv("RIKER_RECENT_QUOTE_HISTORY_SIZE", "10") or 10)
@@ -68,12 +69,18 @@ RIKER_ADVICE_MAX_OUTPUT_TOKENS = max(
 RIKER_TIMEZONE = ZoneInfo("America/New_York")
 RIKER_POST_START_HOUR = 9
 RIKER_POST_END_HOUR = 21
+AWAY_MISSION_COOLDOWN_SECONDS = 300.0
+away_mission_last_started: dict[int, float] = {}
 
 
 @dataclass
 class RikerState:
     recent_quote_ids: list[str] = field(default_factory=list)
     last_spontaneous_post: str | None = None
+    recent_remark_texts: list[str] = field(default_factory=list)
+    recent_remark_topics: list[str] = field(default_factory=list)
+    recent_remark_openings: list[str] = field(default_factory=list)
+    recent_remark_formats: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -94,9 +101,16 @@ def load_state(path: Path = STATE_PATH) -> RikerState:
         last_post = data.get("last_spontaneous_post")
         if not isinstance(recent, list):
             recent = []
+        def values(name: str) -> list[str]:
+            raw = data.get(name, [])
+            return [str(value) for value in raw if value] if isinstance(raw, list) else []
         return RikerState(
             recent_quote_ids=[str(value) for value in recent if value],
             last_spontaneous_post=str(last_post) if last_post else None,
+            recent_remark_texts=values("recent_remark_texts"),
+            recent_remark_topics=values("recent_remark_topics"),
+            recent_remark_openings=values("recent_remark_openings"),
+            recent_remark_formats=values("recent_remark_formats"),
         )
     except FileNotFoundError:
         return RikerState()
@@ -110,6 +124,10 @@ def save_state(state: RikerState, path: Path = STATE_PATH) -> None:
     payload = {
         "recent_quote_ids": state.recent_quote_ids,
         "last_spontaneous_post": state.last_spontaneous_post,
+        "recent_remark_texts": state.recent_remark_texts,
+        "recent_remark_topics": state.recent_remark_topics,
+        "recent_remark_openings": state.recent_remark_openings,
+        "recent_remark_formats": state.recent_remark_formats,
     }
     temporary_path = path.with_suffix(path.suffix + ".tmp")
     try:
@@ -257,6 +275,43 @@ SPONTANEOUS_OPENING_STYLES = (
 )
 FORBIDDEN_REMARK_OPENINGS = ("well, look what",)
 
+WEEKLY_RHYTHM = (
+    ("Captain's log", "a brief captain's-log observation", ("crew morale", "the day's atmosphere", "shipboard routine")),
+    ("Crew assessment", "a playful assessment of the crew", ("crew habits", "teamwork", "questionable competence")),
+    ("Starfleet advice", "a concise piece of practical Starfleet advice", ("patience", "decisions", "professional judgment")),
+    ("Mission teaser", "a strange teaser for a possible away mission", ("anomaly", "diplomacy", "unexpected danger")),
+    ("Shore leave", "a relaxed shore-leave observation", ("food", "music", "poker")),
+    ("Crew commendation", "a humorous commendation or incident report", ("small victories", "creative problem solving", "heroic restraint")),
+    ("Bridge watch", "a warm, lightly philosophical bridge-watch thought", ("quiet moments", "leadership", "the unknown")),
+)
+
+
+def weekly_content_plan(now: datetime | None = None) -> tuple[str, str, tuple[str, ...]]:
+    """Return the stable daily format and its topic pool in Eastern time."""
+    current = eastern_time(now)
+    return WEEKLY_RHYTHM[current.weekday()]
+
+
+def remark_opening(text: str) -> str:
+    words = " ".join(text.lstrip(" \t\r\n\"'“‘").split()).casefold().split()
+    return " ".join(words[:4])
+
+
+def record_remark_used(
+    text: str,
+    *,
+    format_name: str,
+    topic: str,
+    state: RikerState = riker_state,
+    path: Path = STATE_PATH,
+) -> None:
+    """Keep small rolling histories that guide future AI remarks away from repetition."""
+    state.recent_remark_texts = (state.recent_remark_texts + [text.strip()])[-12:]
+    state.recent_remark_topics = (state.recent_remark_topics + [topic])[-8:]
+    state.recent_remark_openings = (state.recent_remark_openings + [remark_opening(text)])[-8:]
+    state.recent_remark_formats = (state.recent_remark_formats + [format_name])[-4:]
+    save_state(state, path)
+
 
 def has_forbidden_remark_opening(text: str) -> bool:
     normalized = text.lstrip(" \t\r\n\"'“‘").casefold()
@@ -387,7 +442,19 @@ async def generate_spontaneous_remark(client: RikerBot) -> str | None:
     if not client.openai:
         return None
     try:
-        opening_style = random.choice(SPONTANEOUS_OPENING_STYLES)
+        format_name, format_instruction, topics = weekly_content_plan()
+        recent_topics = set(riker_state.recent_remark_topics)
+        available_topics = [topic for topic in topics if topic not in recent_topics] or list(topics)
+        topic = random.choice(available_topics)
+        recent_openings = set(riker_state.recent_remark_openings)
+        opening_options = [opening for opening in SPONTANEOUS_OPENING_STYLES if opening not in recent_openings]
+        opening_style = random.choice(opening_options or list(SPONTANEOUS_OPENING_STYLES))
+        recent_text = " | ".join(riker_state.recent_remark_texts[-5:]) or "none recorded"
+        recent_formats = ", ".join(riker_state.recent_remark_formats[-3:]) or "none recorded"
+        client.last_spontaneous_context = {
+            "format_name": format_name,
+            "topic": topic,
+        }
         for attempt in range(2):
             retry_note = (
                 " The previous draft used a forbidden repetitive opening; begin in a clearly "
@@ -399,10 +466,14 @@ async def generate_spontaneous_remark(client: RikerBot) -> str | None:
                 model=OPENAI_MODEL,
                 instructions=RIKER_PERSONA,
                 input=(
-                    "Write one short original remark for a spontaneous Discord appearance. "
+                    f"Write one short original remark in the weekly format '{format_name}': {format_instruction}. "
+                    f"Use the topic '{topic}'. "
                     "Keep it to one or two sentences. Do not quote or cite Star Trek. "
                     f"Open with {opening_style}; vary sentence structure and first words. "
-                    "Never begin with 'Well, look what' or a close variation."
+                    "Never begin with 'Well, look what' or a close variation. "
+                    f"Do not repeat or closely paraphrase these recent remarks: {recent_text}. "
+                    f"Do not reuse these recent opening fragments: {', '.join(riker_state.recent_remark_openings[-4:]) or 'none'}."
+                    f" Recent formats used: {recent_formats}."
                     f"{retry_note}"
                 ),
                 max_output_tokens=100,
@@ -492,6 +563,14 @@ async def send_spontaneous_quote(
 
     if item is not None:
         record_quote_used(item)
+    elif remark:
+        context = getattr(client, "last_spontaneous_context", {})
+        format_name, _, topics = weekly_content_plan()
+        record_remark_used(
+            remark,
+            format_name=str(context.get("format_name", format_name)),
+            topic=str(context.get("topic", topics[0])),
+        )
     riker_state.last_spontaneous_post = datetime.now(RIKER_TIMEZONE).isoformat()
     save_state(riker_state)
     return SendResult(True, f"Sent a {content_kind}.", channel_id, channel_name, content_kind)
@@ -506,10 +585,36 @@ class RikerCommands(app_commands.Group):
         super().__init__(name="riker", description="Commander Riker has the conn.")
         self.client = client
 
+    @app_commands.command(name="awaymission", description="Play a quick, one-choice away mission with Riker.")
+    @app_commands.guild_only()
+    async def awaymission(self, interaction: discord.Interaction) -> None:
+        if interaction.channel_id not in RIKER_CHANNEL_IDS:
+            await interaction.response.send_message("Away missions are available in Riker's configured channels only.", ephemeral=True)
+            return
+        now = time.monotonic()
+        last_started = away_mission_last_started.get(interaction.channel_id)
+        remaining = (
+            AWAY_MISSION_COOLDOWN_SECONDS - (now - last_started)
+            if last_started is not None
+            else 0.0
+        )
+        if remaining > 0:
+            seconds = max(1, math.ceil(remaining))
+            await interaction.response.send_message(
+                f"The away team is still filing its report. Try again in {seconds} seconds.",
+                ephemeral=True,
+            )
+            return
+        away_mission_last_started[interaction.channel_id] = now
+        view = AwayMissionView()
+        await interaction.response.send_message(embed=view.briefing(), view=view, allowed_mentions=discord.AllowedMentions.none())
+        view.message = await interaction.original_response()
+
     @app_commands.command(name="help", description="Learn how to use RikerBot.")
     async def help(self, interaction: discord.Interaction) -> None:
         embed = discord.Embed(title="Commander Riker — Help", description="The Commander is ready to assist.")
         embed.add_field(name="/riker quote", value="Posts a non-repeating line from Riker's configured library.", inline=False)
+        embed.add_field(name="/riker awaymission", value="One short adventure in a configured Riker channel. Anyone can choose; the first click resolves the original post. Expires after 3 minutes; one start per channel every 5 minutes.", inline=False)
         embed.add_field(name="/riker advice question:<your question>", value="Ask for a concise Riker-flavored take when AI mode is enabled.", inline=False)
         embed.add_field(name="/riker status", value="Shows scheduler, channel permission, AI, and recent-post diagnostics.", inline=False)
         embed.add_field(
@@ -612,6 +717,7 @@ class RikerCommands(app_commands.Group):
             f"• Base quote chance: {RIKER_QUOTE_CHANCE:.0%} per eligible hour",
             "• Posting hours: 9:00 AM–9:00 PM Eastern",
             f"• Generated remark chance: {RIKER_GENERATED_REMARK_CHANCE:.0%}",
+            "• Weekly rhythm: " + weekly_content_plan()[0],
             "• Target channel IDs: " + (", ".join(str(value) for value in RIKER_CHANNEL_IDS) or "none"),
         ]
         for channel_id in RIKER_CHANNEL_IDS:
@@ -633,6 +739,8 @@ class RikerCommands(app_commands.Group):
                 f"• Advice cooldown: {RIKER_ADVICE_COOLDOWN_SECONDS}s per user",
                 "• Last spontaneous post: " + (riker_state.last_spontaneous_post or "never recorded"),
                 f"• Recent quote history: {len(riker_state.recent_quote_ids)}/{RIKER_RECENT_QUOTE_HISTORY_SIZE}",
+                f"• Recent remark history: {len(riker_state.recent_remark_texts)} lines, "
+                f"{len(riker_state.recent_remark_topics)} topics, {len(riker_state.recent_remark_formats)} formats",
             ]
         )
         await interaction.response.send_message("\n".join(lines)[:1900], ephemeral=True)

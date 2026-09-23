@@ -80,6 +80,34 @@ class StateTests(unittest.TestCase):
             path.write_text("not json", encoding="utf-8")
             self.assertEqual(bot.load_state(path), bot.RikerState())
 
+    def test_remark_history_round_trip_and_old_state_compatibility(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.json"
+            expected = bot.RikerState(
+                recent_remark_texts=["A fresh report."],
+                recent_remark_topics=["crew morale"],
+                recent_remark_openings=["a fresh report"],
+                recent_remark_formats=["Captain's log"],
+            )
+            bot.save_state(expected, path)
+            self.assertEqual(bot.load_state(path), expected)
+            path.write_text('{"recent_quote_ids": [], "last_spontaneous_post": null}', encoding="utf-8")
+            self.assertEqual(bot.load_state(path), bot.RikerState())
+
+    def test_remark_history_is_bounded(self) -> None:
+        state = bot.RikerState()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.json"
+            for index in range(20):
+                bot.record_remark_used(
+                    f"Remark {index}", format_name="Captain's log", topic=f"topic {index}",
+                    state=state, path=path,
+                )
+        self.assertEqual(len(state.recent_remark_texts), 12)
+        self.assertEqual(len(state.recent_remark_topics), 8)
+        self.assertEqual(len(state.recent_remark_openings), 8)
+        self.assertEqual(len(state.recent_remark_formats), 4)
+
 
 class PermissionTests(unittest.TestCase):
     def test_permission_failure_names_missing_permissions(self) -> None:
@@ -216,6 +244,13 @@ class AdviceResponseTests(unittest.IsolatedAsyncioTestCase):
 
 
 class SpontaneousRemarkTests(unittest.IsolatedAsyncioTestCase):
+    def test_weekly_rhythm_covers_all_days(self) -> None:
+        names = {
+            bot.weekly_content_plan(datetime(2026, 1, 5 + day, tzinfo=bot.RIKER_TIMEZONE))[0]
+            for day in range(7)
+        }
+        self.assertEqual(names, {entry[0] for entry in bot.WEEKLY_RHYTHM})
+
     def test_repetitive_opening_is_detected_even_with_quote_marks(self) -> None:
         self.assertTrue(bot.has_forbidden_remark_opening('“Well, look what drifted in.”'))
         self.assertFalse(bot.has_forbidden_remark_opening("The bridge could use a little music."))

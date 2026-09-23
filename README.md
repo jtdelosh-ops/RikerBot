@@ -120,7 +120,7 @@ RIKER_CHANNEL_IDS=123456789012345678,234567890123456789
 DISCORD_GUILD_ID=987654321098765432
 
 RIKER_QUOTE_CHANCE=0.70
-RIKER_GENERATED_REMARK_CHANCE=0.20
+RIKER_GENERATED_REMARK_CHANCE=0.50
 RIKER_ADVICE_MAX_OUTPUT_TOKENS=500
 RIKER_RECENT_QUOTE_HISTORY_SIZE=10
 RIKER_ADVICE_COOLDOWN_SECONDS=30
@@ -157,8 +157,12 @@ slightly increased after 5 PM. It is also halved when Riker posted within the
 last two hours. Quiet hours always take precedence.
 
 `RIKER_GENERATED_REMARK_CHANCE` controls how often a successful appearance
-tries to generate a short original remark. Static quotes remain the default,
-and any missing or failed AI request falls back to a static quote.
+tries to generate a short original remark. The default is `0.50` (50%). Static
+quotes remain the fallback, and any missing or failed AI request uses a static
+quote instead. Generated remarks follow a weekly rhythm: captain's log,
+crew assessment, Starfleet advice, mission teaser, shore leave, commendation,
+and bridge watch. Riker stores a small rolling history of recent remark text,
+topics, opening fragments, and formats to reduce repetition across restarts.
 
 `RIKER_RECENT_QUOTE_HISTORY_SIZE` controls how many recently used quote texts
 are avoided. History and the last successful spontaneous-post time are stored
@@ -188,6 +192,20 @@ RIKER_ADVICE_COOLDOWN_SECONDS=60
 
 
 ## 7. Commands
+
+### `/riker awaymission`
+
+Starts a short, original adventure with three buttons in a configured Riker
+channel. Works solo; anyone in the channel can choose, and the first click
+resolves the encounter. The result replaces the briefing in the same message.
+Three adventures each have three distinct outcomes. No AI requests are used.
+
+To keep noise down, there are no scheduled missions, mentions, reminders, or
+separate result posts. Each channel can start one mission every five minutes.
+Unanswered missions expire after three minutes by removing their buttons.
+Cooldowns and active missions are in memory; restarting the bot resets them
+and old mission buttons no longer work. Restart the bot to register the new
+slash command (global registration may take time to appear).
 
 ### `/riker help`
 
@@ -282,6 +300,14 @@ bot.py
    +-- hourly scheduler --> random chance --> quotes.json --> configured channel
    |
    +-- /riker advice -----> OpenAI Responses API (optional)
+```
+
+## 11. Run tests
+
+From the repository directory, run:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -q
 ```
 
 ## Good next upgrades
